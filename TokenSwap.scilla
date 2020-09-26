@@ -18,12 +18,11 @@ let no_market = "TokenMarketIsNotExists"
 let t_r_n_zero_label = "TokenReserveMustNotZero"
 let z_r_n_zero_label = "ZilReserveMustNotZero"
 let from_token_contract_callback = "TransferSuccessCallbackMustFromTokenCantract"
-
-let token_not_found_code = Uint32 3
-let order_expired_code = Uint32 4
+let lt_min_want_zil = "LowerThanMinZilUserWantBought"
+let gt_max_sold_token = "GreaterThanMaxTokenUserWantToPay"
+let lt_min_want_token = "LowerThanMinTokenUserWantBought"
+let gt_max_sold_zil = "GreaterThanMaxZilUserWantToPay"
 let order_not_met_code = Uint32 5
-let parameter_is_zero_code = Uint32 6
-let private_function_called_code = Uint32 7
 
 (* returns Uint128 *)
 let input_price =
@@ -119,29 +118,40 @@ end
 
 (* private *)
 (* calls FungibleToken.TransferFrom() *)
+(* exact zil amount *)
 transition TokenToZilInput (token : ByStr20, tokens_sold : Uint128,
         min_zil : Uint128, deadline : BNum, buyer : ByStr20, recipient : ByStr20,
         token_reserve : Option Uint128, balance : Option Uint128)
+    (* general check *)
     sender_is_router = builtin eq _sender hub;
     require sender_is_router caller_not_router;
     blocknumber <- & BLOCKNUMBER;
     block_valid = ble blocknumber deadline;
     require block_valid expired_label;
+
+    (* check token_reserve *)
     require_value token_reserve no_market;
     t_r = get_var_value token_reserve;
     tr_is_zero = builtin eq t_r zero;
     require_not tr_is_zero t_r_n_zero_label;
+
+    (* check tokens sold *)
     ts_is_zero = builtin eq tokens_sold zero;
     txt = "TokensSoldMustNotZero";
     require_not ts_is_zero txt;
+
+    (* check zil reserve *)
     require_value balance no_market;
     b = get_var_value balance;
     b_is_zero = builtin eq b zero;
     require_not b_is_zero z_r_n_zero_label;
+
+    (* check zil bought slippage *)
     zil_bought = input_price tokens_sold t_r b;
     enough_bought = le_int min_zil zil_bought;
-    txt = "ZilBoughtIsLtMin";
-    require enough_bought txt;
+    require enough_bought lt_min_want_zil;
+
+    (* send token to router *)
     sender_pending := buyer;
     token_pending := token;
     zil_bought_pending := zil_bought;
@@ -157,27 +167,38 @@ end
 
 (* private *)
 (* calls FungibleToken.TransferFrom() *)
+(* exact token amount *)
 transition TokenToZilOutput (token : ByStr20, zil_bought : Uint128,
         max_tokens : Uint128, deadline : BNum, buyer : ByStr20, recipient : ByStr20,
         token_reserve : Option Uint128, balance : Option Uint128)
+    (* general check *)
     sender_is_router = builtin eq _sender hub;
     require sender_is_router caller_not_router;
     blocknumber <- & BLOCKNUMBER;
     block_valid = ble blocknumber deadline;
     require block_valid expired_label;
+
+    (* check token_reserve *)
     require_value token_reserve no_market;
     t_r = get_var_value token_reserve;
     tr_is_zero = builtin eq t_r zero;
     require_not tr_is_zero t_r_n_zero_label;
+
+    (* check zil bought *)
     zb_is_zero = builtin eq zil_bought zero;
     txt = "ZilBoughtMustNotZero";
     require_not zb_is_zero txt;
+
+    (* check zil reserve *)
     require_value balance no_market;
     b = get_var_value balance;
+
+    (* check token sold slippage *)
     tokens_sold = output_price zil_bought t_r b;
     enough_sold = le_int tokens_sold max_tokens;
-    txt = "TokenSoldIsGtMax";
-    require enough_sold txt;
+    require enough_sold gt_max_sold_token;
+
+    (* send token to router *)
     sender_pending := buyer;
     token_pending := token;
     zil_bought_pending := zil_bought;
@@ -191,13 +212,118 @@ transition TokenToZilOutput (token : ByStr20, zil_bought : Uint128,
     send msgs
 end
 
-(** Response Functions **)
-transition TransferSuccessCallBack (sender : ByStr20, recipient : ByStr20, amount : Uint128)
+(* private *)
+(* calls FungibleToken.TransferFrom() *)
+(* exact token amount *)
+transition ZilToTokenInput (token : ByStr20, zil_sold : Uint128, min_tokens : Uint128,
+    deadline : BNum, buyer : ByStr20, recipient : ByStr20,
+    token_reserve : Option Uint128, balance : Option Uint128)
+    (* general check *)
+    sender_is_router = builtin eq _sender hub;
+    require sender_is_router caller_not_router;
+    blocknumber <- & BLOCKNUMBER;
+    block_valid = ble blocknumber deadline;
+    require block_valid expired_label;
+
+    (* check token_reserve *)
+    require_value token_reserve no_market;
+    t_r = get_var_value token_reserve;
+    tr_is_zero = builtin eq t_r zero;
+    require_not tr_is_zero t_r_n_zero_label;
+
+    (* check zil reserve *)
+    require_value balance no_market;
+    b = get_var_value balance;
+    b_is_zero = builtin eq b zero;
+    require_not b_is_zero z_r_n_zero_label;
+
+    (* check zil sold *)
+    zs_is_zero = builtin eq zil_sold zero;
+    txt = "ZilSoldMustNotZero";
+    require_not zs_is_zero txt;
+    bal_subbed = builtin sub b zil_sold;
+    b_s_zero = builtin eq bal_subbed zero;
+    txt = "BalanceNotEnough";
+    require_not b_s_zero txt;
+
+    (* check token bought slippage. use subbed zil to calc price??? *)
+    tokens_bought = input_price zil_sold bal_subbed t_r;
+    enough_bought = le_int min_tokens tokens_bought;
+    require enough_bought lt_min_want_token;
+
+    (* send token from router to buyer *)
+    sender_pending := buyer;
+    token_pending := token;
+    zil_sold_pending := zil_sold;
+    token_reserve_new = builtin sub t_r tokens_bought;
+    token_reserve_pending := token_reserve_new;
+    balance_new = builtin add b zil_sold;
+    balance_pending := balance_new;
+    msg = { _tag : "TransferFrom"; _recipient : token; _amount : zero;
+            from : hub; to : recipient; tokens : tokens_bought};
+    msgs = one_msg msg;
+    send msgs
+end
+
+(* private *)
+(* calls FungibleToken.TransferFrom() *)
+(* exact zil amount *)
+transition ZilToTokenOutput (token : ByStr20, tokens_bought : Uint128, max_zil : Uint128,
+    deadline : BNum, buyer : ByStr20, recipient : ByStr20,
+    token_reserve : Option Uint128, balance : Option Uint128)
+    (* general check *)
+    sender_is_router = builtin eq _sender hub;
+    require sender_is_router caller_not_router;
+    blocknumber <- & BLOCKNUMBER;
+    block_valid = ble blocknumber deadline;
+    require block_valid expired_label;
+
+    (* check token_reserve *)
+    require_value token_reserve no_market;
+    t_r = get_var_value token_reserve;
+    tr_is_zero = builtin eq t_r zero;
+    require_not tr_is_zero t_r_n_zero_label;
+
+    (* check zil reserve *)
+    require_value balance no_market;
+    b = get_var_value balance;
+
+    (* check tokens sold *)
+    tb_is_zero = builtin eq tokens_bought zero;
+    txt = "TokensBoughtMustNotZero";
+    require_not tb_is_zero txt;
+
+    (* check tokens sold *)
+    mzil_is_zero = builtin eq max_zil zero;
+    txt = "MaxZilNotZero";
+    require_not mzil_is_zero txt;
+
+    (* send token from router to buyer *)
+    bal_subbed = builtin sub b max_zil;
+    zil_sold = output_price tokens_bought max_zil t_r;
+    zil_refund = builtin sub max_zil zil_sold;
+    sender_pending := buyer;
+    token_pending := token;
+    zil_bought_pending := zil_refund;
+    zil_sold_pending := max_zil;
+    token_reserve_new = builtin sub t_r tokens_bought;
+    token_reserve_pending := token_reserve_new;
+    balance_new = builtin add b zil_sold;
+    balance_pending := balance_new;
+    msg = { _tag : "TransferFrom"; _recipient : token; _amount : zero;
+            from : hub; to : recipient; tokens : tokens_bought};
+    msgs = one_msg msg;
+    send msgs
+end
+
+(* Token Contract callback function, for sending zil to buyer *)
+transition TransferFromSuccessCallBack (sender : ByStr20, recipient : ByStr20, amount : Uint128)
     t_p <- token_pending;
     token_sent = builtin eq t_p _sender;
     require token_sent from_token_contract_callback;
     t_r_p <- token_reserve_pending;
     s_p <- sender_pending;
+    t_p <- token_pending;
     z_b_p <- zil_bought_pending;
     b_p <- balance_pending;
     token_reserve_pending := zero;
@@ -208,7 +334,7 @@ transition TransferSuccessCallBack (sender : ByStr20, recipient : ByStr20, amoun
     balance_pending := zero;
     msg = { _tag : "TradeSuccess"; _recipient : hub; _amount : zero;
             sender : s_p; refund : z_b_p; token : t_p;
-            token_reserve_new : t_r_p; token_zil_balance_new : b_p };
+            token_zil_balance_new : b_p; token_reserve_new : t_r_p };
     msgs = one_msg msg;
     send msgs
 end
