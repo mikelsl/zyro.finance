@@ -2,7 +2,7 @@ scilla_version 0
 
 import BoolUtils
 
-library TokenToZil
+library ZyroTokenSwap
 
 let one = Uint128 1
 let zero = Uint128 0
@@ -79,7 +79,7 @@ let get_var_value =
     | None => Uint128 0
     end
 
-contract TokenToZil
+contract ZyroTokenSwap
 (hub : ByStr20)
 
 field token_reserve_pending : Uint128 = zero
