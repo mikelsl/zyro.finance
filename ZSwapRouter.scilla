@@ -93,16 +93,16 @@ transition ApproveAux (token : ByStr20, aux : ByStr20, limit : Uint128)
             allowed <- token_contract_allowances[token][aux];
             match allowed with
             |   None =>
-                msg = { _tag : "Approve"; _recipient : token; _amount : zero;
-                        spender : aux; tokens : limit };
+                msg = { _tag : "IncreaseAllowance"; _recipient : token; _amount : zero;
+                        spender : aux; amount : limit };
                 msgs = one_msg msg;
                 send msgs
             |   Some a =>
                 is_raise = builtin lt a limit;
                 match is_raise with
                 |   True =>
-                    msg = { _tag : "Approve"; _recipient : token; _amount : zero;
-                            spender : aux; tokens : limit };
+                    msg = { _tag : "IncreaseAllowance"; _recipient : token; _amount : zero;
+                            spender : aux; amount : limit };
                     msgs = one_msg msg;
                     send msgs
                 |   False =>
@@ -174,7 +174,7 @@ transition AddLiquidity (token : ByStr20, min_liquidity : Uint128,
             token : token; min_liquidity : min_liquidity; max_tokens : max_tokens; deadline : deadline;
             total_supply : total_supply; sender_balance : sender_balance;
             token_reserve : token_reserve; balance : token_zil_balance;
-            zil_sold : _amount; sender : _sender };
+            zil_sold : _amount; sender : _sender; lpt_provider: l_m };
     msgs = one_msg msg;
     send msgs
 end
@@ -192,7 +192,7 @@ transition RemoveLiquidity (token : ByStr20, amount : Uint128, min_zil : Uint128
             token : token; amount : amount; min_zil : min_zil;
             min_tokens : min_tokens; deadline : deadline; recipient : recipient;
             total_supply : total_supply; sender_balance : sender_balance; token_reserve : reserve;
-            balance : token_zil_balance; sender : _sender };
+            balance : token_zil_balance; sender : _sender; lpt_provider: l_m };
     msgs = one_msg msg;
     send msgs
 end
@@ -357,15 +357,6 @@ transition TokenToZilTransferOutput (token : ByStr20, zil_bought : Uint128,
         msgs = one_msg msg;
         send msgs
     end
-end
-
-(*** Response Functions Called by other contract ***)
-(** Success Response **)
-(* Response function for successful Approval *)
-transition ApproveSuccess (approver : ByStr20, spender : ByStr20, amount : Uint128)
-    e = { _eventname : "ApproveSuccess"; token : _sender;
-        approver : approver; spender : spender; amount : amount };
-    event e
 end
 
 (* Response function for successful LiquidityManager action *)
