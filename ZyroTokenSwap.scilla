@@ -160,7 +160,7 @@ transition TokenToZilInput (token : ByStr20, tokens_sold : Uint128,
     balance_new = builtin sub b zil_bought;
     balance_pending := balance_new;
     msg = { _tag : "TransferFrom"; _recipient : token; _amount : zero;
-            from : buyer; to : hub; tokens : tokens_sold};
+            from : buyer; to : hub; amount : tokens_sold};
     msgs = one_msg msg;
     send msgs
 end
@@ -207,7 +207,7 @@ transition TokenToZilOutput (token : ByStr20, zil_bought : Uint128,
     balance_new = builtin sub b zil_bought;
     balance_pending := balance_new;
     msg = { _tag : "TransferFrom"; _recipient : token; _amount : zero;
-            from : buyer; to : hub; tokens : tokens_sold};
+            from : buyer; to : hub; amount : tokens_sold};
     msgs = one_msg msg;
     send msgs
 end
@@ -260,7 +260,7 @@ transition ZilToTokenInput (token : ByStr20, zil_sold : Uint128, min_tokens : Ui
     balance_new = builtin add b zil_sold;
     balance_pending := balance_new;
     msg = { _tag : "TransferFrom"; _recipient : token; _amount : zero;
-            from : hub; to : recipient; tokens : tokens_bought};
+            from : hub; to : recipient; amount : tokens_bought};
     msgs = one_msg msg;
     send msgs
 end
@@ -311,7 +311,7 @@ transition ZilToTokenOutput (token : ByStr20, tokens_bought : Uint128, max_zil :
     balance_new = builtin add b zil_sold;
     balance_pending := balance_new;
     msg = { _tag : "TransferFrom"; _recipient : token; _amount : zero;
-            from : hub; to : recipient; tokens : tokens_bought};
+            from : hub; to : recipient; amount : tokens_bought};
     msgs = one_msg msg;
     send msgs
 end
