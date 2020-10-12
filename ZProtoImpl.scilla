@@ -197,17 +197,17 @@ transition AddLiquidityCore (token : ByStr20, min_liquidity : Uint128,
             sender_balance_new = builtin add s_b liquidity_minted;
             sender_balance_pending := sender_balance_new;
             msg1 = { _tag : "TransferFrom"; _recipient : token; _amount : zero;
-                    from : sender; to : hub; tokens : token_amount};
+                    from : sender; to : hub; amount : token_amount};
             msg2 = { _tag : "Mint"; _recipient : lpt_provider; _amount : zero;
-                to : sender; value : l_m_p};
+                    recipient : sender; amount : l_m_p};
             msgs = two_msgs msg1 msg2;
             send msgs
         |   None =>
             sender_balance_pending := liquidity_minted;
             msg1 = { _tag : "TransferFrom"; _recipient : token; _amount : zero;
-                    from : sender; to : hub; tokens : token_amount};
+                    from : sender; to : hub; amount : token_amount};
             msg2 = { _tag : "Mint"; _recipient : lpt_provider; _amount : zero;
-                to : sender; value : l_m_p};
+                    recipient : sender; amount : l_m_p};
             msgs = two_msgs msg1 msg2;
             send msgs
         end
@@ -231,9 +231,9 @@ transition AddLiquidityCore (token : ByStr20, min_liquidity : Uint128,
         l_m_p = builtin sub amount_z_t_sq min_liquidity;
         liquidity_mint_pending := l_m_p;
         msg1 = { _tag : "TransferFrom"; _recipient : token; _amount : zero;
-                from : sender; to : hub; tokens : max_tokens };
-        msg2 = { _tag : "mint"; _recipient : token; _amount : zero;
-                from : lpt_provider; to : sender; tokens : l_m_p};
+                from : sender; to : hub; amount : max_tokens };
+        msg2 = { _tag : "Mint"; _recipient : lpt_provider; _amount : zero;
+                recipient : sender; amount : l_m_p};
         msgs = two_msgs msg1 msg2;
         send msgs
     end
@@ -302,9 +302,9 @@ transition RemoveLiquidityCore (token : ByStr20, amount : Uint128, min_zil : Uin
     balance_pending := balance_new;
     liquidity_burn_pending := l_m_t;
     msg1 = { _tag : "TransferFrom"; _recipient : token; _amount : zero;
-            from : hub; to : recipient; tokens : token_amount};
+            from : hub; to : recipient; amount : token_amount};
     msg2 = { _tag : "Burn"; _recipient : lpt_provider; _amount : zero;
-        from : sender; value : l_m_t};
+            burn_account : sender; amount : l_m_t};
     msgs = two_msgs msg1 msg2;
     send msgs
 end
