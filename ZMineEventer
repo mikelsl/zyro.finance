@@ -1,0 +1,70 @@
+scilla_version 0
+
+import BoolUtils
+
+library ZyroMiningEventer
+
+let one = Uint128 1
+let zero = Uint128 0
+let zero_address = 0x0000000000000000000000000000000000000000
+let succeed_code  = Uint32 1
+let caller_not_owner = "ShouldCalledByRouter"
+let expired_label = "TimeExpired"
+
+contract ZyroMiningEventer
+(owner : ByStr20)
+
+field trade_miners : Map ByStr20 Uint128 = Emp ByStr20 Uint128
+field liquidity_miners : Map ByStr20 Uint128 = Emp ByStr20 Uint128
+field node_miners : Map ByStr20 Uint128 = Emp ByStr20 Uint128
+
+procedure require( condition: Bool, message: String)
+    match condition with 
+    | True => 
+    | False => 
+        e = { _exception : message }; 
+        throw e 
+    end
+end
+
+(* private *)
+transition TradeMiningEvent (trader : ByStr20, amount : Uint128)
+(* general check *)
+sender_is_owner = builtin eq _sender owner;
+require sender_is_owner caller_not_owner;
+
+pre_amount <- trade_miners[trader];
+new_amount = builtin add pre_amount amount;
+trade_miners[trader] := new_amount;
+
+e = {_eventname : "TradeMining"; trader : trader; amount : amount};
+event e
+end
+
+(* private *)
+transition LiquidityMiningEvent (provider : ByStr20, amount : Uint128)
+(* general check *)
+sender_is_owner = builtin eq _sender owner;
+require sender_is_owner caller_not_owner;
+
+pre_amount <- liquidity_miners[provider];
+new_amount = builtin add pre_amount amount;
+liquidity_miners[provider] := new_amount;
+
+e = {_eventname : "LiquidityMinig"; provider : provider; amount : amount};
+event e
+end
+
+(* private *)
+transition NodeMiningEvent (node : ByStr20, amount : Uint128)
+(* general check *)
+sender_is_owner = builtin eq _sender owner;
+require sender_is_owner caller_not_owner;
+
+pre_amount <- node_miners[node];
+new_amount = builtin add pre_amount amount;
+node_miners[node] := new_amount;
+
+e = {_eventname : "NodeMinig"; node : node; amount : amount};
+event e
+end
