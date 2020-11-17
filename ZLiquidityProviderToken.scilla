@@ -4,7 +4,7 @@ scilla_version 0
 (*               Associated library                *)
 (***************************************************)
 import BoolUtils ListUtils IntUtils
-library FungibleToken
+library ZLiquidityProviderToken
 
 let one_msg = 
   fun (msg : Message) => 
@@ -78,7 +78,7 @@ let get_val =
 (*             The contract definition             *)
 (***************************************************)
 
-contract FungibleToken
+contract ZLiquidityProviderToken
 (
   contract_owner: ByStr20,
   name : String,
@@ -104,8 +104,6 @@ field revoked_default_operators : Map ByStr20 (Map ByStr20 Unit)
 
 field allowances: Map ByStr20 (Map ByStr20 Uint128) 
   = Emp ByStr20 (Map ByStr20 Uint128)
-
-field liquidity_manager : ByStr20 = zero_address
 
 (**************************************)
 (*             Procedures             *)
@@ -240,7 +238,7 @@ end
 (* @param recipient: Address of the recipient whose balance is to increase.  *)
 (* @param amount:    Number of tokens to be minted.                          *)
 transition Mint(recipient: ByStr20, amount: Uint128)
-  IsOwner _sender;
+  IsApprovedOperator contract_owner _sender;
   AuthorizedMint recipient amount;
   (* Prevent sending to a contract address that does not support transfers of token *)
   msg_to_recipient = {_tag : "RecipientAcceptMint"; _recipient : recipient; _amount : zero; 
@@ -255,7 +253,7 @@ end
 (* @param burn_account: Address of the token_owner whose balance is to decrease.  *)
 (* @param amount:       Number of tokens to be burned.                            *)
 transition Burn(burn_account: ByStr20, amount: Uint128)
-  IsOwner _sender;
+  IsApprovedOperator contract_owner _sender;
   AuthorizedBurnIfSufficientBalance burn_account amount;
   msg_to_sender = {_tag : "BurnSuccessCallBack"; _recipient : _sender; _amount : zero; 
                     burner : _sender; burn_account : burn_account; amount : amount};
@@ -398,17 +396,5 @@ transition TransferFrom(from: ByStr20, to: ByStr20, amount: Uint128)
   | None => 
     err = CodeNoBalance;
     ThrowError err
-  end
-end
-
-transition SetLiquidityManager (new_manager : ByStr20)
-  owner_set = builtin eq _sender owner;
-  match owner_set with
-  | True =>
-    liquidity_manager := new_manager
-  | False =>
-    msg = { _tag : "NoPrivilige"; _recipient : _sender; _amount : zero};
-    msgs = one_msg msg;
-    send msgs
   end
 end
