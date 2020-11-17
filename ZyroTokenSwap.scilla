@@ -241,13 +241,9 @@ transition ZilToTokenInput (token : ByStr20, zil_sold : Uint128, min_tokens : Ui
     zs_is_zero = builtin eq zil_sold zero;
     txt = "ZilSoldMustNotZero";
     require_not zs_is_zero txt;
-    bal_subbed = builtin sub b zil_sold;
-    b_s_zero = builtin eq bal_subbed zero;
-    txt = "BalanceNotEnough";
-    require_not b_s_zero txt;
 
     (* check token bought slippage. use subbed zil to calc price??? *)
-    tokens_bought = input_price zil_sold bal_subbed t_r;
+    tokens_bought = input_price zil_sold b t_r;
     enough_bought = le_int min_tokens tokens_bought;
     require enough_bought lt_min_want_token;
 
@@ -294,12 +290,11 @@ transition ZilToTokenOutput (token : ByStr20, tokens_bought : Uint128, max_zil :
     require_not tb_is_zero txt;
 
     (* check tokens sold *)
-    mzil_is_zero = builtin eq max_zil zero;
+    mzil_is_zero = builtin eq max_zil zero; 
     txt = "MaxZilNotZero";
     require_not mzil_is_zero txt;
 
     (* send token from router to buyer *)
-    bal_subbed = builtin sub b max_zil;
     zil_sold = output_price tokens_bought max_zil t_r;
     zil_refund = builtin sub max_zil zil_sold;
     sender_pending := buyer;
@@ -317,7 +312,7 @@ transition ZilToTokenOutput (token : ByStr20, tokens_bought : Uint128, max_zil :
 end
 
 (* Token Contract callback function, for sending zil to buyer *)
-transition TransferFromSuccessCallBack (sender : ByStr20, recipient : ByStr20, amount : Uint128)
+transition TransferFromSuccessCallBack (initiator : ByStr20, sender : ByStr20, recipient : ByStr20, amount : Uint128)
     t_p <- token_pending;
     token_sent = builtin eq t_p _sender;
     require token_sent from_token_contract_callback;
@@ -334,7 +329,7 @@ transition TransferFromSuccessCallBack (sender : ByStr20, recipient : ByStr20, a
     balance_pending := zero;
     msg = { _tag : "TradeSuccess"; _recipient : hub; _amount : zero;
             sender : s_p; refund : z_b_p; token : t_p;
-            token_zil_balance_new : b_p; token_reserve_new : t_r_p };
+            token_zil_balance_new : b_p; token_reserve_new : t_r_p; token_amount : amount };
     msgs = one_msg msg;
     send msgs
 end
