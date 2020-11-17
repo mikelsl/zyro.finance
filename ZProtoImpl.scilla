@@ -58,6 +58,13 @@ let two_msgs =
         let msgs_tmp = one_msg msg2 in
         Cons {Message} msg1 msgs_tmp
         
+let three_msgs =
+    fun (msg1 : Message) =>
+    fun (msg2 : Message) =>
+    fun (msg3 : Message) =>
+        let msgs_tmp = two_msgs msg2 msg3 in
+        Cons {Message} msg1 msgs_tmp
+    
 let le_int =
   fun (a : Uint128) => fun (b : Uint128) =>
     let x = builtin lt a b in
@@ -132,7 +139,7 @@ end
 transition AddLiquidityCore (token : ByStr20, min_liquidity : Uint128,
         max_tokens : Uint128, deadline : BNum, total_supply : Option Uint128,
         sender_balance : Option Uint128, token_reserve : Option Uint128,
-        zil_reserve : Option Uint128, zil_sold : Uint128, sender : ByStr20, lpt_provider : ByStr20)
+        balance : Option Uint128, zil_sold : Uint128, sender : ByStr20, lpt_provider : ByStr20)
     (* general check *)
     sender_is_router = builtin eq _sender hub;
     require sender_is_router caller_not_router;
@@ -161,8 +168,8 @@ transition AddLiquidityCore (token : ByStr20, min_liquidity : Uint128,
         require_value token_reserve no_market;
         t_r = get_var_value token_reserve;
 
-        require_value zil_reserve no_market;
-        b = get_var_value zil_reserve;
+        require_value balance no_market;
+        b = get_var_value balance;
 
         zil_reserve = b;
         amount_t_r = builtin mul zil_sold t_r;
@@ -174,11 +181,14 @@ transition AddLiquidityCore (token : ByStr20, min_liquidity : Uint128,
         l_m_z = builtin div amount_t_s zil_reserve;
         l_m_t = builtin div amount_t_s_t t_r;
         enough_tokens = le_int token_amount max_tokens;
-        enough_liquidity = le_int min_liquidity liquidity_minted;
+        txt =  "no enough_tokens";
+        token_amount_str = builtin to_string token_amount;
+        error = builtin concat txt token_amount_str;
+        require enough_tokens error;
 
-        order_met = andb enough_tokens enough_liquidity; 
-        txt =  "order not met";
-        require order_met txt;
+        enough_liquidity = le_int min_liquidity liquidity_minted;
+        txt =  "no enough_liquidity";
+        require enough_liquidity txt;
 
         total_supply_new = builtin add t_s liquidity_minted;
         total_supply_pending := total_supply_new;
@@ -213,13 +223,11 @@ transition AddLiquidityCore (token : ByStr20, min_liquidity : Uint128,
         end
     |   True =>
         txt = "NoZilReserv";
-        require_value zil_reserve txt;
-        b = get_var_value zil_reserve;
+        require_value balance txt;
+        b = get_var_value balance;
         enough_sold = le_int ten_e_six zil_sold;
         txt =  "NoEnoughSold";   
         require enough_sold txt;
-        total_supply_pending := b;
-        sender_balance_pending := b;
         sender_pending := sender;
         token_pending := token;
         zil_sold_pending := zil_sold;
@@ -230,6 +238,8 @@ transition AddLiquidityCore (token : ByStr20, min_liquidity : Uint128,
         amount_z_t_sq = builtin isqrt amount_z_t;
         l_m_p = builtin sub amount_z_t_sq min_liquidity;
         liquidity_mint_pending := l_m_p;
+        total_supply_pending := l_m_p;
+        sender_balance_pending := l_m_p;
         msg1 = { _tag : "TransferFrom"; _recipient : token; _amount : zero;
                 from : sender; to : hub; amount : max_tokens };
         msg2 = { _tag : "Mint"; _recipient : lpt_provider; _amount : zero;
@@ -283,11 +293,20 @@ transition RemoveLiquidityCore (token : ByStr20, amount : Uint128, min_zil : Uin
     l_m_t = builtin div amount_t_s_t t_r;
 
     order_met = andb enough_tokens enough_zil;
-    txt =  "order not met";   
-    require order_met txt;
+    txt =  "order not met ";   
+    txtsep = " ";
+    token_amount_str = builtin to_string token_amount;
+    zil_amount_str = builtin to_string zil_amount;
+    error1 = builtin concat txt token_amount_str;    
+    error2 = builtin concat error1 txtsep;
+    error3 = builtin concat error2 zil_amount_str;
+    require order_met error3;
 
     require_value sender_balance no_market;
     s_b = get_var_value sender_balance;
+    enough_liquidity = le_int amount s_b;
+    txt =  "provide less, require more";   
+    require enough_liquidity txt;
 
     sender_pending := sender;
     token_pending := token;
@@ -304,13 +323,13 @@ transition RemoveLiquidityCore (token : ByStr20, amount : Uint128, min_zil : Uin
     msg1 = { _tag : "TransferFrom"; _recipient : token; _amount : zero;
             from : hub; to : recipient; amount : token_amount};
     msg2 = { _tag : "Burn"; _recipient : lpt_provider; _amount : zero;
-            burn_account : sender; amount : l_m_t};
+            burn_account : sender; amount : amount};
     msgs = two_msgs msg1 msg2;
     send msgs
 end
 
 (** Response Functions **)
-transition TransferFromSuccessCallBack (sender : ByStr20, recipient : ByStr20, amount : Uint128)
+transition TransferFromSuccessCallBack (initiator : ByStr20, sender : ByStr20, recipient : ByStr20, amount : Uint128)
     t_p <- token_pending;
     token_sent = builtin eq t_p _sender;
     match token_sent with
@@ -332,15 +351,10 @@ transition TransferFromSuccessCallBack (sender : ByStr20, recipient : ByStr20, a
         balance_pending := zero;
         msg = { _tag : "LiquidityManagerSuccess"; _recipient : hub; _amount : zero;
                 sender : s_p; refund : z_b_p; token : t_p; total_supply_new : t_s_p;
-                token_reserve_new : t_r_p;  sender_balance_new : s_b_p; token_zil_balance_new : b_p };
+                token_reserve_new : t_r_p;  sender_balance_new : s_b_p; token_zil_balance_new : b_p; token_amount : amount };
         msgs = one_msg msg;
         send msgs
     |   False =>
-        msg = { _tag : "ActionFailure"; _recipient : hub; _amount : zero;
-                sender : sender; refund : zero; label : failure_label;
-                code : private_function_called_code };
-        msgs = one_msg msg;
-        send msgs
     end
 end
 
@@ -373,15 +387,14 @@ transition TransferFromFailure (sender : ByStr20, recipient : ByStr20, amount : 
     end
 end
 
-transition MintSuccessCallBack (recipient : ByStr20, amount : Uint128)
+transition MintSuccessCallBack (minter : ByStr20, recipient: ByStr20, amount : Uint128)
     l_p <- lpt_pending;
-    token_mint = builtin eq l_p _sender;
+    token_mint = builtin eq _this_address minter;
     match token_mint with
     | True =>
-        s_p <- sender_pending;
         t_p <- token_pending;
         msg = { _tag : "MintSuccess"; _recipient : hub; _amount : zero;
-                recipient : s_p; token : t_p; lpt_balance_new : amount };
+                recipient : recipient; token : t_p; lpt_balance_new : amount };
         msgs = one_msg msg;
         send msgs
     | False =>
@@ -393,20 +406,19 @@ transition MintSuccessCallBack (recipient : ByStr20, amount : Uint128)
     end
 end
 
-transition BurnSuccessCallBack (sender : ByStr20, amount : Uint128)
+transition BurnSuccessCallBack (burner : ByStr20, burn_account : ByStr20, amount : Uint128)
     l_p <- lpt_pending;
-    token_burn = builtin eq l_p _sender;
+    token_burn = builtin eq _this_address burn_account;
     match token_burn with
     |   True =>
-        s_p <- sender_pending;
         t_p <- token_pending;
         msg = { _tag : "BurnSuccess"; _recipient : hub; _amount : zero;
-                sender : s_p; token : t_p; lpt_balance_new : amount };
+                sender : burn_account; token : t_p; lpt_balance_new : amount };
         msgs = one_msg msg;
         send msgs
     |   False =>
         msg = { _tag : "ActionFailure"; _recipient : hub; _amount : zero;
-                sender : sender; refund : zero; label : failure_label;
+                sender : burn_account; refund : zero; label : failure_label;
                 code : private_function_called_code };
         msgs = one_msg msg;
         send msgs
