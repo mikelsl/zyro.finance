@@ -10,18 +10,36 @@ let zero_address = 0x0000000000000000000000000000000000000000
 let tt = True
 let ff = False
 
-let already_initialized_code = Uint32 1
 let market_already_exists_code = Uint32 2
 let token_not_found_code = Uint32 3
 let private_function_called_code = Uint32 7
 let bad_recipient_code = Uint32 8
 let bad_allowance_code = Uint32 10
 
+(* Error events *)
+type Error =
+  | CodeNotOwner
+
+let make_error =
+  fun (result : Error) =>
+    let result_code = 
+      match result with
+      | CodeNotOwner                     => Int32 -1
+      end
+    in
+    { _exception : "Error"; code : result_code }
+
 (* Modified from ZDex *)
 let one_msg =
     fun (msg : Message) =>
         let nil_msg = Nil {Message} in
         Cons {Message} msg nil_msg
+
+let two_msgs =
+    fun (msg1 : Message) =>
+    fun (msg2 : Message) =>
+        let msgs_tmp = one_msg msg2 in
+        Cons {Message} msg1 msgs_tmp
 
 let approved_address =
     fun (a_arg : ByStr20) =>
@@ -34,49 +52,60 @@ let approved_address =
         let in_a_1_2 = orb eq_a_1 eq_a_2 in
         orb in_a_1_2 eq_a_3
 
+let get_var_value =
+    fun( var : Option Uint128) =>
+      match var with
+      | Some x => x
+      | None => Uint128 0
+      end
+
 contract ZSwapRouter
-()
+(owner : ByStr20)
 
 field token_count : Uint128 = zero
 field id_to_token : Map Uint128 ByStr20 = Emp Uint128 ByStr20
-
 field token_reserves : Map ByStr20 Uint128 = Emp ByStr20 Uint128
 field token_total_supplies : Map ByStr20 Uint128 = Emp ByStr20 Uint128
 field token_balances : Map ByStr20 (Map ByStr20 Uint128) = Emp ByStr20 (Map ByStr20 Uint128)
 field token_allowances : Map ByStr20 (Map ByStr20 (Map ByStr20 Uint128)) = Emp ByStr20 (Map ByStr20 (Map ByStr20 Uint128))
 field zil_reserves : Map ByStr20 Uint128 = Emp ByStr20 Uint128
 field lpt_balances : Map ByStr20 (Map ByStr20 Uint128) = Emp ByStr20 (Map ByStr20 Uint128)
-
-(* Keep track of tokens, aux contracts, and approvals *)
 field token_contract_allowances : Map ByStr20 (Map ByStr20 Uint128) = Emp ByStr20 (Map ByStr20 Uint128)
-(* This hub's auxiliary contracts *)
-field initialized : Bool = ff
 field liquidity_manager : ByStr20 = zero_address
 field zil_to_token : ByStr20 = zero_address
 field token_to_zil : ByStr20 = zero_address
 field lpt_provider : ByStr20 = zero_address
+field mining_eventer : ByStr20 = zero_address
+
+procedure ThrowError(err : Error)
+  e = make_error err;
+  throw e
+end
+
+procedure IsOwner(address: ByStr20)
+  is_owner = builtin eq owner address;
+  match is_owner with
+  | True =>
+  | False =>
+    err = CodeNotOwner;
+    ThrowError err
+  end
+end
+
 
 (* Initializes contract's auxiliary contracts *)
-transition Initialize(l_m_address : ByStr20, z_t_address : ByStr20, t_z_address : ByStr20, l_p_address : ByStr20)
-    init <- initialized;
-    match init with
-    |   False =>
-        initialized := tt;
-        liquidity_manager := l_m_address;
-        zil_to_token := z_t_address;
-        token_to_zil := t_z_address;
-        lpt_provider := l_p_address;
-        msg = { _tag : "InitializeSuccess"; _recipient : _sender; _amount : zero;
-                l_m_address : l_m_address; z_t_address : z_t_address; t_z_address : t_z_address };
-        msgs = one_msg msg;
-        send msgs
-    |   True =>
-        msg = { _tag : "InitializeFailure"; _recipient : _sender; _amount : zero;
-                l_m_address : l_m_address; z_t_address : z_t_address; t_z_address : t_z_address;
-                code : already_initialized_code };
-        msgs = one_msg msg;
-        send msgs
-    end
+transition Initialize(l_m_address : ByStr20, z_t_address : ByStr20, t_z_address : ByStr20, l_p_address : ByStr20, m_e_address : ByStr20)
+    IsOwner _sender;
+    liquidity_manager := l_m_address;
+    zil_to_token := z_t_address;
+    token_to_zil := t_z_address;
+    lpt_provider := l_p_address;
+    mining_eventer := m_e_address;
+    msg = { _tag : "InitializeSuccess"; _recipient : _sender; _amount : zero;
+            l_m_address : l_m_address; z_t_address : z_t_address; t_z_address : t_z_address;
+            m_e_address : m_e_address };
+    msgs = one_msg msg;
+    send msgs
 end
 
 (* Required before performing certain actions *)
@@ -166,6 +195,7 @@ transition AddLiquidity (token : ByStr20, min_liquidity : Uint128,
     (* payable *)
     accept;
     l_m <- liquidity_manager;
+    l_p_t <- lpt_provider;
     total_supply <- token_total_supplies[token];
     token_reserve <- token_reserves[token];
     token_zil_balance <- zil_reserves[token];
@@ -174,7 +204,7 @@ transition AddLiquidity (token : ByStr20, min_liquidity : Uint128,
             token : token; min_liquidity : min_liquidity; max_tokens : max_tokens; deadline : deadline;
             total_supply : total_supply; sender_balance : sender_balance;
             token_reserve : token_reserve; balance : token_zil_balance;
-            zil_sold : _amount; sender : _sender; lpt_provider: l_m };
+            zil_sold : _amount; sender : _sender; lpt_provider: l_p_t };
     msgs = one_msg msg;
     send msgs
 end
@@ -184,6 +214,7 @@ transition RemoveLiquidity (token : ByStr20, amount : Uint128, min_zil : Uint128
         min_tokens : Uint128, deadline : BNum, recipient : ByStr20)
     (* token_total_supplies[token], token_reserves[token], _balance, token_balances[token][_sender],  *)
     l_m <- liquidity_manager;
+    l_p_t <- lpt_provider;
     total_supply <- token_total_supplies[token];
     reserve <- token_reserves[token];
     token_zil_balance <- zil_reserves[token];
@@ -192,7 +223,7 @@ transition RemoveLiquidity (token : ByStr20, amount : Uint128, min_zil : Uint128
             token : token; amount : amount; min_zil : min_zil;
             min_tokens : min_tokens; deadline : deadline; recipient : recipient;
             total_supply : total_supply; sender_balance : sender_balance; token_reserve : reserve;
-            balance : token_zil_balance; sender : _sender; lpt_provider: l_m };
+            balance : token_zil_balance; sender : _sender; lpt_provider: l_p_t };
     msgs = one_msg msg;
     send msgs
 end
@@ -362,17 +393,20 @@ end
 (* Response function for successful LiquidityManager action *)
 transition LiquidityManagerSuccess(sender : ByStr20, refund : Uint128, token : ByStr20,
         total_supply_new : Uint128, token_reserve_new : Uint128, sender_balance_new : Uint128,
-        token_zil_balance_new : Uint128)
+        token_zil_balance_new : Uint128, token_amount : Uint128)
     l_m <- liquidity_manager;
     l_m_sent = builtin eq l_m _sender;
     match l_m_sent with
     |   True =>
+        m_e_address <- mining_eventer;
         token_total_supplies[token] := total_supply_new;
         token_reserves[token] := token_reserve_new;
         token_balances[token][sender] := sender_balance_new;
         zil_reserves[token] := token_zil_balance_new;
-        msg = { _tag : "LiquidityManagerSuccess"; _recipient : sender; _amount : refund };
-        msgs = one_msg msg;
+        msg1 = { _tag : "LiquidityManagerSuccess"; _recipient : sender; _amount : refund };
+        msg2 = { _tag : "LiquidityMiningEvent"; _recipient : m_e_address; _amount : zero; 
+                  provider : sender; amount : token_amount};
+        msgs = two_msgs msg1 msg2;
         send msgs
     |   False =>
         msg = { _tag : "LiquidityManagerSuccessFailure"; _recipient : _sender; _amount : zero;
@@ -384,17 +418,20 @@ end
 
 (* Response function for successful ZilToToken action *)
 transition TradeSuccess(sender : ByStr20, refund : Uint128, token : ByStr20, token_reserve_new : Uint128,
-        token_zil_balance_new : Uint128)
+        token_zil_balance_new : Uint128, token_amount : Uint128)
     l_m <- liquidity_manager;
     z_t <- zil_to_token;
     t_z <- token_to_zil;
     aux_sent = approved_address _sender l_m z_t t_z;
     match aux_sent with
     |   True =>
+        m_e_address <- mining_eventer;
         token_reserves[token] := token_reserve_new;
         zil_reserves[token] := token_zil_balance_new;
-        msg = { _tag : "TradeSuccess"; _recipient : sender; _amount : refund };
-        msgs = one_msg msg;
+        msg1 = { _tag : "TradeSuccess"; _recipient : sender; _amount : refund };
+        msg2 = { _tag : "TradeMiningEvent"; _recipient : m_e_address; _amount : zero;
+                trader:sender; amount: token_amount};
+        msgs = two_msgs msg1 msg2;
         send msgs
     |   False =>
         msg = { _tag : "TradeSuccessFailure"; _recipient : _sender; _amount : zero;
@@ -511,4 +548,23 @@ transition Reserve (token : ByStr20)
             reserve : reserve };
     msgs = one_msg msg;
     send msgs
+end
+
+transition RecipientAcceptTransferFrom(
+    initiator : ByStr20,
+    sender : ByStr20,
+    recipient : ByStr20,
+    amount : Uint128
+)
+    is_valid_transfer_to_self = builtin eq recipient _this_address;
+      (* let self_triggered = builtin eq initiator _this_address in *)
+      (* let is_transfer_to_self = builtin eq recipient _this_address in
+      anb self_triggered is_transfer_to_self; *)
+  
+    match is_valid_transfer_to_self with
+    | False =>
+      e = { _exception : "InvalidInvocation" };
+      throw e
+    | True => (* noop *)
+    end
 end
