@@ -8,6 +8,10 @@ let one = Uint128 1
 let zero = Uint128 0
 let ten_e_six = Uint128 1000000
 let zero_address = 0x0000000000000000000000000000000000000000
+let gzil_address = 0xa845c1034cd077bd8d32be0447239c7e4be6cb21
+let zil_deadline = BNum 500000000
+let factor_one = Uint128 101
+let percent = Uint128 100
 
 let failure_label = "LiquidityManagerFailure"
 let caller_not_router = "ShouldCalledByRouter"
@@ -23,6 +27,19 @@ let gt_max_sold_zil = "GreaterThanMaxZilUserWantToPay"
 
 let order_not_met_code = Uint32 5
 let private_function_called_code = Uint32 7
+
+(* Error events *)
+type Error =
+  | CodeIsGZIL
+
+let make_error =
+  fun (result : Error) =>
+    let result_code = 
+      match result with
+      | CodeIsGZIL => Int32 -5
+      end
+    in
+    { _exception : "Error"; code : result_code }
 
 let any_zero_double =
     fun (first : Uint128) =>
@@ -88,7 +105,41 @@ let get_var_value =
       | Some x => x
       | None => Uint128 0
       end
-  
+
+let get_zil_value =       
+    fun( deadline : BNum) =>
+    fun( zil_sold : Uint128) =>
+    fun( token_sold : Uint128) =>
+    fun( t_r : Uint128) =>
+    fun( zil_reserve : Uint128) =>
+        let exact_zil = builtin eq deadline zil_deadline in
+        match exact_zil with
+        | False =>
+            let amount_t_r = builtin mul token_sold zil_reserve in
+            let amount_tr_zr = builtin div amount_t_r t_r in
+            let zil_amount = builtin add amount_tr_zr one in
+            zil_amount
+        | True =>
+            zil_sold
+        end
+
+let get_token_value =       
+    fun( deadline : BNum) =>
+    fun( zil_sold : Uint128) =>
+    fun( token_sold : Uint128) =>
+    fun( t_r : Uint128) =>
+    fun( zil_reserve : Uint128) =>
+        let exact_zil = builtin eq deadline zil_deadline in
+        match exact_zil with
+        | True =>
+            let amount_t_r = builtin mul zil_sold t_r in
+            let amount_tr_zr = builtin div amount_t_r zil_reserve in
+            let token_amount = builtin add amount_tr_zr one in
+            token_amount
+        | False =>
+            token_sold
+        end
+
 contract ZProtoImpl
 (hub : ByStr20)
 
@@ -107,6 +158,11 @@ field balance_pending : Uint128 = zero
 
 (* What function is currently pending? *)
 field fx_pending : Uint128 = zero
+
+procedure ThrowError(err : Error)
+  e = make_error err;
+  throw e
+end
 
 procedure require( condition: Bool, message: String)
     match condition with 
@@ -135,12 +191,23 @@ procedure require_value( var: Option Uint128, message: String)
     end
 end
 
+procedure IsNotGZIL(address: ByStr20)
+  is_gzil = builtin eq gzil_address address;
+  match is_gzil with
+  | True =>
+    err = CodeIsGZIL;
+    ThrowError err
+  | False =>
+  end
+end
+
 (* Logic for AddLiquidity *)
 transition AddLiquidityCore (token : ByStr20, min_liquidity : Uint128,
         max_tokens : Uint128, deadline : BNum, total_supply : Option Uint128,
         sender_balance : Option Uint128, token_reserve : Option Uint128,
         balance : Option Uint128, zil_sold : Uint128, sender : ByStr20, lpt_provider : ByStr20)
     (* general check *)
+    IsNotGZIL token;
     sender_is_router = builtin eq _sender hub;
     require sender_is_router caller_not_router;
     blocknumber <- & BLOCKNUMBER;
@@ -172,15 +239,17 @@ transition AddLiquidityCore (token : ByStr20, min_liquidity : Uint128,
         b = get_var_value balance;
 
         zil_reserve = b;
-        amount_t_r = builtin mul zil_sold t_r;
-        amount_tr_zr = builtin div amount_t_r zil_reserve;
-        token_amount = builtin add amount_tr_zr one;
-        amount_t_s = builtin mul zil_sold t_s;
+        token_amount = get_token_value deadline zil_sold max_tokens t_r zil_reserve;
+        zil_amount = get_zil_value deadline zil_sold max_tokens t_r zil_reserve;
+        
+        amount_t_s = builtin mul zil_amount t_s;
         amount_t_s_t = builtin mul token_amount t_s;
         liquidity_minted = builtin div amount_t_s zil_reserve;
         l_m_z = builtin div amount_t_s zil_reserve;
         l_m_t = builtin div amount_t_s_t t_r;
-        enough_tokens = le_int token_amount max_tokens;
+        tmp_max_tokens = builtin mul max_tokens factor_one;
+        adjust_max_tokens = builtin div tmp_max_tokens percent;
+        enough_tokens = le_int token_amount adjust_max_tokens;
         txt =  "no enough_tokens";
         token_amount_str = builtin to_string token_amount;
         error = builtin concat txt token_amount_str;
@@ -254,6 +323,7 @@ transition RemoveLiquidityCore (token : ByStr20, amount : Uint128, min_zil : Uin
         total_supply : Option Uint128, sender_balance : Option Uint128, token_reserve : Option Uint128,
         balance : Option Uint128, sender : ByStr20, lpt_provider : ByStr20)
     (* general check *)
+    IsNotGZIL token;
     sender_is_router = builtin eq _sender hub;
     require sender_is_router caller_not_router;
     blocknumber <- & BLOCKNUMBER;
@@ -287,6 +357,10 @@ transition RemoveLiquidityCore (token : ByStr20, amount : Uint128, min_zil : Uin
     zil_amount = builtin div amount_bal t_s;
     amount_t_r = builtin mul amount t_r;
     token_amount = builtin div amount_t_r t_s;
+    tmp_zil_amount = builtin mul zil_amount factor_one;
+    adjust_zil_amount = builtin div tmp_zil_amount percent;
+    tmp_token_amount = builtin mul token_amount factor_one;
+    adjust_token_amount = builtin mul tmp_token_amount percent;
     enough_zil = le_int min_zil zil_amount;
     enough_tokens = le_int min_tokens token_amount;
     amount_t_s_t = builtin mul token_amount t_s;
@@ -302,22 +376,22 @@ transition RemoveLiquidityCore (token : ByStr20, amount : Uint128, min_zil : Uin
     error3 = builtin concat error2 zil_amount_str;
     require order_met error3;
 
-    require_value sender_balance no_market;
     s_b = get_var_value sender_balance;
+    (* require_value sender_balance no_market;
     enough_liquidity = le_int amount s_b;
     txt =  "provide less, require more";   
-    require enough_liquidity txt;
+    require enough_liquidity txt; *)
 
     sender_pending := sender;
     token_pending := token;
-    sender_balance_new = builtin sub s_b amount;
+    sender_balance_new = builtin sub s_b zero;
     sender_balance_pending := sender_balance_new;
     total_supply_new = builtin sub t_s amount;
     total_supply_pending := total_supply_new;
     zil_bought_pending := zil_amount;
     token_reserve_new = builtin sub t_r token_amount;
     token_reserve_pending := token_reserve_new;
-    balance_new = builtin sub b amount;
+    balance_new = builtin sub b zil_amount;
     balance_pending := balance_new;
     liquidity_burn_pending := l_m_t;
     msg1 = { _tag : "TransferFrom"; _recipient : token; _amount : zero;
