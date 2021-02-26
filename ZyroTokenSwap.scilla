@@ -295,7 +295,7 @@ transition ZilToTokenOutput (token : ByStr20, tokens_bought : Uint128, max_zil :
     require_not mzil_is_zero txt;
 
     (* send token from router to buyer *)
-    zil_sold = output_price tokens_bought max_zil t_r;
+    zil_sold = output_price tokens_bought b t_r;
     zil_refund = builtin sub max_zil zil_sold;
     sender_pending := buyer;
     token_pending := token;
