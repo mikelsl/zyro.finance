@@ -1,0 +1,338 @@
+scilla_version 0
+
+(***************************************************)
+(*               Associated library                *)
+(***************************************************)
+import BoolUtils ListUtils IntUtils
+library ZWPark
+
+type Denom =
+  | Zil
+  | Token of ByStr20 (* token address / hash *)
+type Coins = | Coins of Denom Uint128 (* denom, amount  *)
+
+type UserInfo = | UserInfo of Uint128 Uint128 (* amount,rewardDebt *)
+type Pool = | Pool of ByStr20 Uint128 BNum Uint128 (* lpToken,allocPoint,lastRewardBlock,accRewardPerShare *)
+let zil_address = 0x0000000000000000000000000000000000000000
+let zil = Zil
+let one = Uint256 1
+let zero = Uint256 0
+let u128_zero = Uint128 0
+
+let share_multiply = Uint256 1000000000000
+
+let one_msg = 
+  fun (msg : Message) => 
+  let nil_msg = Nil {Message} in
+  Cons {Message} msg nil_msg
+
+let two_msgs =
+fun (msg1 : Message) =>
+fun (msg2 : Message) =>
+  let msgs_tmp = one_msg msg2 in
+  Cons {Message} msg1 msgs_tmp
+
+let grow : Uint128 -> Uint256 =
+fun (var : Uint128) =>
+let maybe_big = builtin to_uint256 var in
+match maybe_big with
+| Some big => big
+| None => Uint256 0 (* should never happen *)
+end
+
+(* Error events *)
+type Error =
+  | CodeNotOwner
+  | CodeIsSender
+  | CodeNotApprovedOperator
+  | CodeNotApprovedSpender
+  | CodeNoBalance
+  | CodeInsufficientFunds
+  | CodeInsufficientAllowanceOrFunds
+
+let make_error =
+  fun (result : Error) =>
+    let result_code = 
+      match result with
+      | CodeNotOwner                     => Int32 -1
+      | CodeIsSender                     => Int32 -2
+      | CodeNotApprovedOperator          => Int32 -3
+      | CodeNotApprovedSpender           => Int32 -4
+      | CodeNoBalance                    => Int32 -5
+      | CodeInsufficientFunds            => Int32 -6
+      | CodeInsufficientAllowanceOrFunds => Int32 -7
+      end
+    in
+    { _exception : "Error"; code : result_code }
+  
+let zero = Uint128 0
+
+(* Dummy user-defined ADT *)
+type Unit =
+| Unit
+
+
+
+let min_int =
+  fun (a : Uint128) => fun (b : Uint128) =>
+  let min = builtin lt a b in
+  match min with
+  | True =>
+    a
+  | False =>
+    b
+  end
+    
+(* A util function to test equality *)
+let f_eq =
+  fun (a : ByStr20) =>
+  fun (b : ByStr20) =>
+    builtin eq a b
+
+(* Instantiate a type function to test membership in a list *)
+let is_default_operator = @list_mem ByStr20
+
+let get_val =
+  fun (some_val: Option Uint128) =>
+  match some_val with
+  | Some val => val
+  | None => zero
+  end
+
+(***************************************************)
+(*             The contract definition             *)
+(***************************************************)
+
+
+
+contract ZyroPark
+(
+  contract_owner: ByStr20,
+  reward_token: ByStr20,
+  start_block: BNum,
+  block_reward: Uint128
+)
+
+(* Mutable fields *)
+field owner : ByStr20 = contract_owner
+field pending_owner : ByStr20 = zil_address
+field pools : Map Uint256 Pool = Emp  Uint256 Pool
+field pool_count : Uint256 = Uint256 0
+field total_alloc_point : Uint128 = u128_zero
+field user_infos : Map Uint256 (Map ByStr20 UserInfo) = Emp Uint256 (Map ByStr20 UserInfo)
+
+
+
+(**************************************)
+(*             Procedures             *)
+(**************************************)
+
+procedure Send(coins : Coins, to_address : ByStr20)
+  match coins with
+  | Coins denom amount =>
+    match denom with
+    | Zil =>
+      msg = { _tag : "AddFunds"; _recipient: to_address; _amount: amount };
+      msgs = one_msg msg;
+      send msgs
+    | Token token =>
+      msg_to_token =  {
+        _tag : "Transfer"; _recipient: token; _amount: zero;
+        to: to_address; amount: amount
+      };
+      msgs = one_msg msg_to_token;
+      send msgs
+    end
+  end
+end
+
+procedure Receive(coins : Coins)
+  match coins with
+  | Coins denom amount =>
+    match denom with
+    | Zil =>
+      needs_refund = uint128_gt _amount amount;
+      accept;
+      match needs_refund with
+      | True =>
+        refund =
+          let refund_amount = builtin sub _amount amount in
+          Coins zil refund_amount;
+        Send refund _sender
+      | False => (* do nothing *)
+      end
+    | Token token =>
+      msg_to_token = {
+        _tag : "TransferFrom"; _recipient: token; _amount: zero;
+        from: _sender; to: _this_address; amount: amount
+      };
+      msgs = one_msg msg_to_token;
+      send msgs
+    end
+  end
+end
+
+procedure ThrowUnlessSenderIsOwner()
+  current_owner <- owner;
+  is_owner = builtin eq _sender current_owner;
+  match is_owner with
+  | True =>
+  | False =>
+    e = { _exception : "InvalidSender" };
+    throw e
+  end
+end
+
+procedure DoBatchUpdatePools()
+  e = {_eventname : "batchUpdatePools" };
+  event e
+end
+
+procedure DoUpdatePool(pool_id :Uint256)
+  e = {_eventname : "UpdatePools" };
+  event e
+end
+
+(***************************************)
+(*             Transitions             *)
+(***************************************)
+
+  transition TransferOwnership(
+    new_owner : ByStr20
+  )
+    ThrowUnlessSenderIsOwner;
+    existing_owner <- owner;
+    new_owner_is_existing_owner = builtin eq new_owner existing_owner;
+    match new_owner_is_existing_owner with
+    | True =>
+      e = { _exception : "InvalidParameter" };
+      throw e
+    | False =>
+      pending_owner := new_owner
+    end
+  end
+  
+  transition AcceptPendingOwnership()
+    new_owner <- pending_owner;
+    sender_is_pending_owner = builtin eq _sender new_owner;
+    match sender_is_pending_owner with
+    | False =>
+      e = { _exception : "InvalidSender" };
+      throw e
+    | True =>
+      owner := new_owner;
+      pending_owner := zil_address;
+      e = { _eventname: "OwnershipTransferred"; owner: new_owner };
+      event e
+    end
+  end
+
+
+  transition SetRewardMultiply()
+
+  end
+
+  transition AddPool(alloc_point:Uint128,lp_token:ByStr20,with_update:Bool)
+    ThrowUnlessSenderIsOwner;
+    current_block <- & BLOCKNUMBER;
+    match with_update with
+    | False =>
+    | True =>
+      DoBatchUpdatePools
+    end;
+    
+
+    new_pool = Pool lp_token alloc_point current_block u128_zero;
+    current_pool_id_count <- pool_count;
+    new_pool_id_count = builtin add current_pool_id_count one;
+    pools[current_pool_id_count] := new_pool;
+    current_total_alloc_point <- total_alloc_point;
+    new_total_alloc_point =  builtin add current_total_alloc_point alloc_point;
+    total_alloc_point  := new_total_alloc_point
+
+
+  end
+
+  transition SetPool(pool_id:Uint256, new_alloc_point:Uint128, with_update:Bool)
+    ThrowUnlessSenderIsOwner;
+    match with_update with
+    | False =>
+    | True =>
+        DoBatchUpdatePools
+    end;
+
+    maybe_pool <- pools[pool_id];
+    match maybe_pool with
+    | None =>
+        e = { _exception : "PoolNotExists" };
+        throw e
+    | Some  pool =>
+      match pool with
+        | Pool lp_token old_alloc_point current_block acc_reward_per_share  => (* zil reserve, token reserve *)
+          new_pool = Pool lp_token new_alloc_point current_block u128_zero;
+          pools[pool_id] := new_pool ;
+
+          current_total_alloc_point <- total_alloc_point;
+          new_total_alloc_point = let  added_alloc_point =  builtin add current_total_alloc_point new_alloc_point in
+                                    builtin sub added_alloc_point old_alloc_point;
+          total_alloc_point  := new_total_alloc_point
+      end
+    end
+
+
+  end
+
+  transition UpdatePool()
+
+  end
+
+  transition BatchUpdatePool()
+
+  end
+
+  transition Deposit(pool_id:Uint256,amount: Uint128)
+      maybe_pool <- pools[pool_id];
+      match maybe_pool with
+      | None =>
+          e = { _exception : "PoolNotExists" };
+          throw e
+      | Some  pool =>
+        match pool with
+          | Pool lp_token old_alloc_point current_block acc_reward_per_share  => (* zil reserve, token reserve *)
+           (* accept all tokens *)
+            token_in = let token = Token lp_token in 
+                Coins token amount;
+            Receive token_in;
+
+            DoUpdatePool pool_id;
+
+            maybe_user_info <- user_infos[pool_id][_sender];
+            user_info = match maybe_user_info with
+            | None => 
+                UserInfo u128_zero u128_zero
+            | Some result =>
+                result
+            end
+
+            match user_info with
+            | UserInfo current_debt current_amount =>
+                reward_debt = let grow_amount = grow amount in
+                    let grow_acc_per_share =  grow  acc_reward_per_share in
+                        let numerator = builtin  mul grow_acc_per_share grow_amount in
+                            let result = builtin div numerator share_multiply in
+                                builtin to_uint128 result;
+                match reward_debt with
+                | None =>
+                    e = { _exception : "IntegerOverflow" };
+                    throw e
+                | Some result =>
+                    user_info = UserInfo amount result
+                end
+            end
+      end
+  end
+  
+  transition Withdraw()
+
+  end
+  
