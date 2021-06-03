@@ -114,9 +114,74 @@ let get_val_uint256 =
   fun (some_val: Option Uint256) =>
   match some_val with
   | Some val => val
-  | None =>  Uint256 0
+  | None => Uint256 0
   end
 
+let get_rewards_between_blocks0 =
+  fun(current_block: BNum) =>
+      fun(last_update_block:BNum) => 
+          fun(start_reward_block:BNum) => 
+              fun(per_block_reward: Uint256) =>
+                  fun(multiply: Uint256) =>
+                      fun(max_reward: Uint128) =>
+                  let calc_reward_block = max_bn start_reward_block last_update_block in
+                      let  reward_not_started = builtin blt current_block calc_reward_block in
+                          let block_nums = match reward_not_started with
+                                          | True =>
+                                              Uint256 0
+                                          | False =>
+                                              let block_nums_int = builtin bsub current_block calc_reward_block in
+                                                let maybe_block_nums = builtin to_uint256 block_nums_int  in
+                                                  get_val_uint256 maybe_block_nums
+                                          end in
+                                block_nums
+
+let get_rewards_between_blocks1 =
+  fun(current_block: BNum) =>
+      fun(last_update_block:BNum) => 
+          fun(start_reward_block:BNum) => 
+              fun(per_block_reward: Uint256) =>
+                  fun(multiply: Uint256) =>
+                      fun(max_reward: Uint128) =>
+                  let calc_reward_block = max_bn start_reward_block last_update_block in
+                      let  reward_not_started = builtin blt current_block calc_reward_block in
+                          let block_nums = match reward_not_started with
+                                          | True =>
+                                              Uint256 0
+                                          | False =>
+                                              let block_nums_int = builtin bsub current_block calc_reward_block in
+                                                let maybe_block_nums = builtin to_uint256 block_nums_int  in
+                                                  get_val_uint256 maybe_block_nums
+                                          end in
+                              let raw_reward =  builtin mul block_nums per_block_reward in
+                                  let multiple_reward = builtin mul raw_reward multiply in
+                                     multiple_reward
+
+  let get_rewards_between_blocks = 
+  fun(current_block: BNum) =>
+      fun(last_update_block:BNum) => 
+          fun(start_reward_block:BNum) => 
+              fun(per_block_reward: Uint256) =>
+                  fun(multiply: Uint256) =>
+                      fun(max_reward: Uint128) =>
+                  let calc_reward_block = max_bn start_reward_block last_update_block in
+                      let  reward_not_started = builtin blt current_block calc_reward_block in
+                          let block_nums = match reward_not_started with
+                                          | True =>
+                                              Uint256 0
+                                          | False =>
+                                              let block_nums_int = builtin bsub current_block calc_reward_block in
+                                                let maybe_block_nums = builtin to_uint256 block_nums_int  in
+                                                  get_val_uint256 maybe_block_nums
+                                          end in
+                              let raw_reward =  builtin mul block_nums per_block_reward in
+                                  let multiple_reward = builtin mul raw_reward multiply in
+                                      let reward = builtin div multiple_reward  reward_multiply in
+                                          let uint128_reward = builtin to_uint128 reward in
+                                            let expect_reward = get_val uint128_reward in
+                                              min_int expect_reward max_reward
+
+                                                                                            
 
 (***************************************************)
 (*             The contract definition             *)
@@ -316,13 +381,15 @@ end
         match pool with
           | Pool lp_token old_alloc_point last_block acc_reward_per_share  => (* zil reserve, token reserve *)
             current_block <- & BLOCKNUMBER;
-            reward = get_rewards_between_blocks current_block last_block;
-
-            maybe_new_acc_reward_per_share = let grow_reward = grow reward in
+            (* reward = get_rewards_between_blocks current_block last_block; *)
+            reward = Uint128 0;
+            total_supply = Uint128 0;
+            new_acc_reward_per_share = let grow_reward = grow reward in
                 let grow_total_supply  = grow total_supply in
                     let multiple_reward = builtin mul grow_reward share_multiply in
-                        let result = builtin div multiple_reward grow_total_supply
-                            builtin to_uint128 result
+                        let result = builtin div multiple_reward grow_total_supply in
+                            let maybe_new_acc_reward_per_share = builtin to_uint128 result in
+                               get_val maybe_new_acc_reward_per_share;
 
 
             new_pool = Pool lp_token old_alloc_point current_block new_acc_reward_per_share;
@@ -490,7 +557,9 @@ end
   
 
   transition TestGetReward(current_block: BNum,last_update_block:BNum,start_reward_block:BNum,per_block_reward: Uint256,multiply: Uint256,max_reward: Uint128)
+      result0 = get_rewards_between_blocks0 current_block last_update_block start_reward_block per_block_reward multiply max_reward;
+      result1 = get_rewards_between_blocks1 current_block last_update_block start_reward_block per_block_reward multiply max_reward;
       result = get_rewards_between_blocks current_block last_update_block start_reward_block per_block_reward multiply max_reward;
-      e = {_eventname : "result" ,result : result;};
+      e = {_eventname : "result" ;result : result;result0:result0; result1:result1};
       event e
   end
