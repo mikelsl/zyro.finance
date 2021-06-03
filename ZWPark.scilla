@@ -12,7 +12,7 @@ type Denom =
 type Coins = | Coins of Denom Uint128 (* denom, amount  *)
 
 type UserInfo = | UserInfo of Uint128 Uint128 (* amount,rewardDebt *)
-type Pool = | Pool of ByStr20 Uint128 BNum Uint128 (* lpToken,allocPoint,lastRewardBlock,accRewardPerShare *)
+type Pool = | Pool of ByStr20 Uint128 BNum Uint128 (* lpToken,lpBalance,allocPoint,lastRewardBlock,accRewardPerShare *)
 let zil_address = 0x0000000000000000000000000000000000000000
 let zil = Zil
 let one = Uint256 1
@@ -20,6 +20,7 @@ let zero = Uint256 0
 let u128_zero = Uint128 0
 
 let share_multiply = Uint256 1000000000000
+let reward_multiply = Uint256 10000
 
 let one_msg = 
   fun (msg : Message) => 
@@ -82,6 +83,16 @@ let min_int =
   | False =>
     b
   end
+
+let max_bn =
+  fun (a : BNum) => fun (b : BNum) =>
+  let min = builtin blt a b in
+  match min with
+  | True =>
+    b
+  | False =>
+    a
+  end
     
 (* A util function to test equality *)
 let f_eq =
@@ -98,6 +109,14 @@ let get_val =
   | Some val => val
   | None => zero
   end
+
+let get_val_uint256 =
+  fun (some_val: Option Uint256) =>
+  match some_val with
+  | Some val => val
+  | None =>  Uint256 0
+  end
+
 
 (***************************************************)
 (*             The contract definition             *)
@@ -120,6 +139,8 @@ field pools : Map Uint256 Pool = Emp  Uint256 Pool
 field pool_count : Uint256 = Uint256 0
 field total_alloc_point : Uint128 = u128_zero
 field user_infos : Map Uint256 (Map ByStr20 UserInfo) = Emp Uint256 (Map ByStr20 UserInfo)
+field reward_balance : Uint128  = u128_zero
+field reward_multiply : Uint128  = Uint128 10000
 
 
 
@@ -192,6 +213,9 @@ procedure DoUpdatePool(pool_id :Uint256)
   e = {_eventname : "UpdatePools" };
   event e
 end
+
+
+
 
 (***************************************)
 (*             Transitions             *)
@@ -282,8 +306,30 @@ end
 
   end
 
-  transition UpdatePool()
+  transition UpdatePool(pool_id:Uint256)
+      maybe_pool <- pools[pool_id];
+      match maybe_pool with
+      | None =>
+          e = { _exception : "PoolNotExists" };
+          throw e
+      | Some  pool =>
+        match pool with
+          | Pool lp_token old_alloc_point last_block acc_reward_per_share  => (* zil reserve, token reserve *)
+            current_block <- & BLOCKNUMBER;
+            reward = get_rewards_between_blocks current_block last_block;
 
+            maybe_new_acc_reward_per_share = let grow_reward = grow reward in
+                let grow_total_supply  = grow total_supply in
+                    let multiple_reward = builtin mul grow_reward share_multiply in
+                        let result = builtin div multiple_reward grow_total_supply
+                            builtin to_uint128 result
+
+
+            new_pool = Pool lp_token old_alloc_point current_block new_acc_reward_per_share;
+            pools[pool_id] := new_pool
+
+        end
+      end
   end
 
   transition BatchUpdatePool()
@@ -312,27 +358,139 @@ end
                 UserInfo u128_zero u128_zero
             | Some result =>
                 result
-            end
+            end;
+
+
 
             match user_info with
             | UserInfo current_debt current_amount =>
-                reward_debt = let grow_amount = grow amount in
+                maybe_pending_reward =  let grow_amount = grow current_amount in
+                  let grow_current_debt = grow current_debt in
                     let grow_acc_per_share =  grow  acc_reward_per_share in
                         let numerator = builtin  mul grow_acc_per_share grow_amount in
-                            let result = builtin div numerator share_multiply in
+                            let calculated_reward = builtin div numerator share_multiply in
+                              let result = builtin sub calculated_reward grow_current_debt in
                                 builtin to_uint128 result;
-                match reward_debt with
+
+
+                match maybe_pending_reward with
                 | None =>
                     e = { _exception : "IntegerOverflow" };
                     throw e
-                | Some result =>
-                    user_info = UserInfo amount result
+                | Some pending_reward =>
+                  gt_zero = uint128_gt pending_reward zero;
+                  match gt_zero with
+                  | True =>
+                    token_out = let token = Token reward_token in 
+                      Coins token pending_reward;
+                    Send token_out _sender
+                  | False =>
+                  end
+                end;
+
+
+
+                new_amount = builtin add amount current_amount;
+                maybe_new_reward_debt = let grow_new_amount = grow new_amount in
+                    let grow_acc_per_share =  grow  acc_reward_per_share in
+                        let numerator = builtin  mul grow_acc_per_share grow_new_amount in
+                            let result = builtin div numerator share_multiply in
+                                builtin to_uint128 result;
+
+                match maybe_new_reward_debt with
+                | None =>
+                    e = { _exception : "IntegerOverflow" };
+                    throw e
+                | Some new_reward_debt =>
+                  new_user_info = UserInfo new_reward_debt new_amount;
+                  user_infos[pool_id][_sender] := new_user_info
                 end
             end
+          end
       end
   end
   
-  transition Withdraw()
+  transition Withdraw(pool_id:Uint256,amount: Uint128)
+    maybe_pool <- pools[pool_id];
+      match maybe_pool with
+      | None =>
+          e = { _exception : "PoolNotExists" };
+          throw e
+      | Some  pool =>
+        match pool with
+          | Pool lp_token old_alloc_point current_block acc_reward_per_share  => (* zil reserve, token reserve *)
+         
 
+            DoUpdatePool pool_id;
+
+            maybe_user_info <- user_infos[pool_id][_sender];
+            user_info = match maybe_user_info with
+            | None => 
+                UserInfo u128_zero u128_zero
+            | Some result =>
+                result
+            end;
+
+
+
+            match user_info with
+            | UserInfo current_debt current_amount =>
+                maybe_pending_reward =  let grow_amount = grow current_amount in
+                  let grow_current_debt = grow current_debt in
+                    let grow_acc_per_share =  grow  acc_reward_per_share in
+                        let numerator = builtin  mul grow_acc_per_share grow_amount in
+                            let calculated_reward = builtin div numerator share_multiply in
+                              let result = builtin sub calculated_reward grow_current_debt in
+                                builtin to_uint128 result;
+
+
+                match maybe_pending_reward with
+                | None =>
+                    e = { _exception : "IntegerOverflow" };
+                    throw e
+                | Some pending_reward =>
+                  gt_zero = uint128_gt pending_reward zero;
+                  match gt_zero with
+                  | True =>
+                    token_out = let token = Token reward_token in 
+                      Coins token pending_reward;
+                    Send token_out _sender
+                  | False =>
+                  end
+                end;
+
+
+
+                new_amount = builtin sub current_amount amount;
+                (* send tokens *)
+                token_out = let token = Token lp_token in 
+                    Coins token amount;
+                Send token_out _sender;
+
+
+
+                maybe_new_reward_debt = let grow_new_amount = grow new_amount in
+                    let grow_acc_per_share =  grow  acc_reward_per_share in
+                        let numerator = builtin  mul grow_acc_per_share grow_new_amount in
+                            let result = builtin div numerator share_multiply in
+                                builtin to_uint128 result;
+
+                match maybe_new_reward_debt with
+                | None =>
+                    e = { _exception : "IntegerOverflow" };
+                    throw e
+                | Some new_reward_debt =>
+                  new_user_info = UserInfo new_reward_debt new_amount;
+                  user_infos[pool_id][_sender] := new_user_info
+                end
+            end
+          end
+      end
   end
   
+
+  transition TestGetReward(current_block: BNum,last_update_block:BNum,start_reward_block:BNum,per_block_reward: Uint256,multiply: Uint256,max_reward: Uint128)
+      result = get_rewards_between_blocks current_block last_update_block start_reward_block per_block_reward multiply max_reward;
+      e = {_eventname : "result" ,result : result;};
+      event e
+  end
