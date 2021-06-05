@@ -12,7 +12,7 @@ type Denom =
 type Coins = | Coins of Denom Uint128 (* denom, amount  *)
 
 type UserInfo = | UserInfo of Uint128 Uint128 (* amount,rewardDebt *)
-type Pool = | Pool of ByStr20 Uint128 BNum Uint128 (* lpToken,lpBalance,allocPoint,lastRewardBlock,accRewardPerShare *)
+type Pool = | Pool of ByStr20 Uint128 BNum Uint128 (* lpToken,allocPoint,lastRewardBlock,accRewardPerShare *)
 let zil_address = 0x0000000000000000000000000000000000000000
 let zil = Zil
 let one = Uint256 1
@@ -117,47 +117,8 @@ let get_val_uint256 =
   | None => Uint256 0
   end
 
-let get_rewards_between_blocks0 =
-  fun(current_block: BNum) =>
-      fun(last_update_block:BNum) => 
-          fun(start_reward_block:BNum) => 
-              fun(per_block_reward: Uint256) =>
-                  fun(multiply: Uint256) =>
-                      fun(max_reward: Uint128) =>
-                  let calc_reward_block = max_bn start_reward_block last_update_block in
-                      let  reward_not_started = builtin blt current_block calc_reward_block in
-                          let block_nums = match reward_not_started with
-                                          | True =>
-                                              Uint256 0
-                                          | False =>
-                                              let block_nums_int = builtin bsub current_block calc_reward_block in
-                                                let maybe_block_nums = builtin to_uint256 block_nums_int  in
-                                                  get_val_uint256 maybe_block_nums
-                                          end in
-                                block_nums
 
-let get_rewards_between_blocks1 =
-  fun(current_block: BNum) =>
-      fun(last_update_block:BNum) => 
-          fun(start_reward_block:BNum) => 
-              fun(per_block_reward: Uint256) =>
-                  fun(multiply: Uint256) =>
-                      fun(max_reward: Uint128) =>
-                  let calc_reward_block = max_bn start_reward_block last_update_block in
-                      let  reward_not_started = builtin blt current_block calc_reward_block in
-                          let block_nums = match reward_not_started with
-                                          | True =>
-                                              Uint256 0
-                                          | False =>
-                                              let block_nums_int = builtin bsub current_block calc_reward_block in
-                                                let maybe_block_nums = builtin to_uint256 block_nums_int  in
-                                                  get_val_uint256 maybe_block_nums
-                                          end in
-                              let raw_reward =  builtin mul block_nums per_block_reward in
-                                  let multiple_reward = builtin mul raw_reward multiply in
-                                     multiple_reward
-
-  let get_rewards_between_blocks = 
+let get_rewards_between_blocks = 
   fun(current_block: BNum) =>
       fun(last_update_block:BNum) => 
           fun(start_reward_block:BNum) => 
@@ -202,6 +163,7 @@ field owner : ByStr20 = contract_owner
 field pending_owner : ByStr20 = zil_address
 field pools : Map Uint256 Pool = Emp  Uint256 Pool
 field pool_count : Uint256 = Uint256 0
+field pool_lp_balances : Map Uint256 Uint128 = Emp  Uint256 Uint128
 field total_alloc_point : Uint128 = u128_zero
 field user_infos : Map Uint256 (Map ByStr20 UserInfo) = Emp Uint256 (Map ByStr20 UserInfo)
 field reward_balance : Uint128  = u128_zero
@@ -286,6 +248,7 @@ end
 (*             Transitions             *)
 (***************************************)
 
+(* admin part start *)
   transition TransferOwnership(
     new_owner : ByStr20
   )
@@ -316,11 +279,27 @@ end
     end
   end
 
-
-  transition SetRewardMultiply()
-
+  transition SetRewardMultiply(new_reward_multi : Uint256)
+    ThrowUnlessSenderIsOwner;
+    old_reward_multi <- reward_multiply;
+    reward_multiply := new_reward_multi;
+    e = { _eventname: "RewardMultiplyChanged"; new: new_reward_multi ; old : old_reward_multi };
+    event e
   end
 
+  transition AddReward(amount : Uint128)
+    ThrowUnlessSenderIsOwner;
+    input = Coins reward_token amount;
+    Receive input;
+    old_reward_balance <- reward_balance;
+    new_reward_balance = builtin add old_reward_balance amount;
+    reward_balance := new_reward_balance;
+
+    e = { _eventname: "RewardAdded"; current_balance: reward_balance ; old_balance: old_reward_balance };
+    event e
+  end
+
+  (* should not add duplicated lp_token *)
   transition AddPool(alloc_point:Uint128,lp_token:ByStr20,with_update:Bool)
     ThrowUnlessSenderIsOwner;
     current_block <- & BLOCKNUMBER;
@@ -331,14 +310,21 @@ end
     end;
     
 
-    new_pool = Pool lp_token alloc_point current_block u128_zero;
+    new_pool = Pool lp_token  alloc_point current_block u128_zero;
     current_pool_id_count <- pool_count;
     new_pool_id_count = builtin add current_pool_id_count one;
     pools[current_pool_id_count] := new_pool;
+    pool_count := new_pool_id_count;
+
+    (* update balances *)
+    pool_lp_balances[current_pool_id_count] := u128_zero;
+
     current_total_alloc_point <- total_alloc_point;
     new_total_alloc_point =  builtin add current_total_alloc_point alloc_point;
     total_alloc_point  := new_total_alloc_point
 
+    e = { _eventname: "PoolAdded";  pool_id : current_pool_id_count; lp_token_addr : lp_token; alloc_point : alloc_point;  total_alloc_point :total_alloc_point;}
+    event e
 
   end
 
@@ -364,12 +350,13 @@ end
           current_total_alloc_point <- total_alloc_point;
           new_total_alloc_point = let  added_alloc_point =  builtin add current_total_alloc_point new_alloc_point in
                                     builtin sub added_alloc_point old_alloc_point;
-          total_alloc_point  := new_total_alloc_point
+          total_alloc_point  := new_total_alloc_point;
+          e = { _eventname: "PoolSetted";  pool_id : pool_id; lp_token_addr : lp_token; alloc_point : new_alloc_point;  total_alloc_point :new_total_alloc_point;}
+          event e
       end
     end
-
-
   end
+(* admin part stop *)
 
   transition UpdatePool(pool_id:Uint256)
       maybe_pool <- pools[pool_id];
@@ -379,31 +366,55 @@ end
           throw e
       | Some  pool =>
         match pool with
-          | Pool lp_token old_alloc_point last_block acc_reward_per_share  => (* zil reserve, token reserve *)
+          | Pool lp_token  pool_alloc_point last_update_block curr_acc_reward_per_share  => (* zil reserve, token reserve *)
             current_block <- & BLOCKNUMBER;
-            (* reward = get_rewards_between_blocks current_block last_block; *)
-            reward = Uint128 0;
-            total_supply = Uint128 0;
-            new_acc_reward_per_share = let grow_reward = grow reward in
-                let grow_total_supply  = grow total_supply in
-                    let multiple_reward = builtin mul grow_reward share_multiply in
-                        let result = builtin div multiple_reward grow_total_supply in
-                            let maybe_new_acc_reward_per_share = builtin to_uint128 result in
-                               get_val maybe_new_acc_reward_per_share;
+            curr_reward_multiply <- reward_multiply;
+            max_reward <- reward_balance; 
+            calculated_reward = get_rewards_between_blocks current_block last_update_block start_block block_reward curr_reward_multiply max_reward;
+            curr_total_alloc_point <- total_alloc_point;
+
+            lp_balance <- pool_lp_balances[pid];
+
+            just_update_block_num = let is_total_alloc_point_zero = builtin eq curr_total_alloc_point u128_zero in
+                                        let is_lp_balance_zero = builtin eq lp_balance u128_zero in
+                                            builtin orb is_total_alloc_point_zero is_lp_balance_zero
 
 
-            new_pool = Pool lp_token old_alloc_point current_block new_acc_reward_per_share;
-            pools[pool_id] := new_pool
+            match is_total_alloc_point_zero with
+            | True =>
+                (* just update last_update block*)
+                new_pool = Pool lp_token  old_alloc_point current_block curr_acc_reward_per_share;
+                pools[pool_id] := new_pool;
+                e = { _eventname: "PoolUpdated";  pool_id : pool_id; old_acc_reward_per_share : curr_acc_reward_per_share ; new_acc_reward_per_share:curr_acc_reward_per_share}
+                event e
+            | False =>
 
+                pool_reward = u128_mul_div calculated_reward pool_alloc_point curr_total_alloc_point;
+                
+
+                new_acc_reward_per_share = let grow_reward = grow pool_reward in
+                    let grow_lp_balance  = grow lp_balance in
+                        let multiple_reward = builtin mul grow_reward share_multiply in
+                            let result = builtin div multiple_reward grow_lp_balance in
+                                let maybe_new_add_acc_reward_per_share = builtin to_uint128 result in
+                                    let new_add_acc_reward_per_share = get_val maybe_new_add_acc_reward_per_share in
+                                        builtin add curr_acc_reward_per_share new_add_acc_reward_per_share;
+
+                new_pool = Pool lp_token pool_alloc_point current_block new_acc_reward_per_share;
+                pools[pool_id] := new_pool;
+                e = { _eventname: "PoolUpdated";  pool_id : pool_id; old_acc_reward_per_share : curr_acc_reward_per_share ; new_acc_reward_per_share:new_acc_reward_per_share}
+                event e
+
+            end
         end
       end
   end
 
-  transition BatchUpdatePool()
-
-  end
-
+ 
   transition Deposit(pool_id:Uint256,amount: Uint128)
+
+      DoUpdatePool pool_id;
+
       maybe_pool <- pools[pool_id];
       match maybe_pool with
       | None =>
@@ -411,13 +422,12 @@ end
           throw e
       | Some  pool =>
         match pool with
-          | Pool lp_token old_alloc_point current_block acc_reward_per_share  => (* zil reserve, token reserve *)
+          | Pool lp_token old_lp_balance old_alloc_point current_block acc_reward_per_share  => (* zil reserve, token reserve *)
            (* accept all tokens *)
             token_in = let token = Token lp_token in 
                 Coins token amount;
             Receive token_in;
 
-            DoUpdatePool pool_id;
 
             maybe_user_info <- user_infos[pool_id][_sender];
             user_info = match maybe_user_info with
@@ -426,8 +436,6 @@ end
             | Some result =>
                 result
             end;
-
-
 
             match user_info with
             | UserInfo current_debt current_amount =>
@@ -451,6 +459,7 @@ end
                     token_out = let token = Token reward_token in 
                       Coins token pending_reward;
                     Send token_out _sender
+
                   | False =>
                   end
                 end;
@@ -472,12 +481,22 @@ end
                   new_user_info = UserInfo new_reward_debt new_amount;
                   user_infos[pool_id][_sender] := new_user_info
                 end
+
+                (* update balance *)
+                old_lp_balance <- pool_lp_balances[pool_id];
+                new_lp_balance = builtin add old_lp_balance amount;
+                pool_lp_balances[pool_id] := new_lp_balance;
+
+                e = { _eventname: "Deposit"; sender:_sender;  pool_id : pool_id; amount :amount; new_lp_balance: new_lp_balance };
+                event e
+
             end
           end
       end
   end
   
   transition Withdraw(pool_id:Uint256,amount: Uint128)
+    DoUpdatePool pool_id;
     maybe_pool <- pools[pool_id];
       match maybe_pool with
       | None =>
@@ -485,10 +504,10 @@ end
           throw e
       | Some  pool =>
         match pool with
-          | Pool lp_token old_alloc_point current_block acc_reward_per_share  => (* zil reserve, token reserve *)
+          | Pool lp_token  old_alloc_point current_block acc_reward_per_share  => (* zil reserve, token reserve *)
          
+            old_lp_balance <- pool_lp_balances[pool_id];
 
-            DoUpdatePool pool_id;
 
             maybe_user_info <- user_infos[pool_id][_sender];
             user_info = match maybe_user_info with
@@ -534,6 +553,15 @@ end
                     Coins token amount;
                 Send token_out _sender;
 
+                (* update balance *)
+                old_lp_balance <- pool_lp_balances[pool_id];
+                new_lp_balance = builtin sub old_lp_balance amount;
+                pool_lp_balances[pool_id] := new_lp_balance;
+
+                e = { _eventname: "Withdraw"; sender:_sender;  pool_id : pool_id; amount :amount; new_lp_balance: new_lp_balance };
+                event e
+
+
 
 
                 maybe_new_reward_debt = let grow_new_amount = grow new_amount in
@@ -550,6 +578,9 @@ end
                   new_user_info = UserInfo new_reward_debt new_amount;
                   user_infos[pool_id][_sender] := new_user_info
                 end
+
+              
+
             end
           end
       end
