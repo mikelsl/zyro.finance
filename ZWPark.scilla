@@ -117,6 +117,19 @@ let get_val_uint256 =
   | None => Uint256 0
   end
 
+  (* calc d*y /x *)
+let u128_mul_div : Uint128 -> Uint128 -> Uint128 -> Uint128  =
+  fun (d : Uint128) =>
+  fun (y : Uint128) =>
+  fun (x : Uint128) =>
+    let big_x = grow x in
+    let big_y = grow y in
+    let big_d = grow d in
+    let d_times_y = builtin mul big_d big_y in
+    let d_times_y_over_x = builtin div d_times_y big_x in
+    let maybe_res = builtin to_uint128 d_times_y_over_x in
+    get_val maybe_res
+
 
 let get_rewards_between_blocks = 
   fun(current_block: BNum) =>
